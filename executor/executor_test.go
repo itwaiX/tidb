@@ -225,6 +225,9 @@ func TestSelectWithoutFrom(t *testing.T) {
 	tk.MustQuery("select 1 + 2*3;").Check(testkit.Rows("7"))
 	tk.MustQuery(`select _utf8"string";`).Check(testkit.Rows("string"))
 	tk.MustQuery("select 1 order by 1;").Check(testkit.Rows("1"))
+	tk.MustQuery("SELECT  'a' as f1 having f1 = 'a';").Check(testkit.Rows("a"))
+	tk.MustQuery("SELECT (SELECT * FROM (SELECT 'a') t) AS f1 HAVING (f1 = 'a' OR TRUE);").Check(testkit.Rows("a"))
+	tk.MustQuery("SELECT (SELECT * FROM (SELECT 'a') t) + 1 AS f1 HAVING (f1 = 'a' OR TRUE)").Check(testkit.Rows("1"))
 }
 
 // TestSelectBackslashN Issue 3685.
@@ -2064,42 +2067,6 @@ func TestCheckTableClusterIndex(t *testing.T) {
 	tk.MustExec("create table admin_test (c1 int, c2 int, c3 int default 1, primary key (c1, c2), index (c1), unique key(c2));")
 	tk.MustExec("insert admin_test (c1, c2) values (1, 1), (2, 2), (3, 3);")
 	tk.MustExec("admin check table admin_test;")
-}
-
-func TestCoprocessorStreamingFlag(t *testing.T) {
-	store, clean := testkit.CreateMockStore(t)
-	defer clean()
-
-	tk := testkit.NewTestKit(t, store)
-	tk.MustExec("use test")
-	tk.MustExec("create table t (id int, value int, index idx(id))")
-	// Add some data to make statistics work.
-	for i := 0; i < 100; i++ {
-		tk.MustExec(fmt.Sprintf("insert into t values (%d, %d)", i, i))
-	}
-
-	tests := []struct {
-		sql    string
-		expect bool
-	}{
-		{"select * from t", true},                         // TableReader
-		{"select * from t where id = 5", true},            // IndexLookup
-		{"select * from t where id > 5", true},            // Filter
-		{"select * from t limit 3", false},                // Limit
-		{"select avg(id) from t", false},                  // Aggregate
-		{"select * from t order by value limit 3", false}, // TopN
-	}
-
-	ctx := context.Background()
-	for _, test := range tests {
-		ctx1 := context.WithValue(ctx, "CheckSelectRequestHook", func(req *kv.Request) {
-			comment := fmt.Sprintf("sql=%s, expect=%v, get=%v", test.sql, test.expect, req.Streaming)
-			require.Equal(t, test.expect, req.Streaming, comment)
-		})
-		rs, err := tk.Session().Execute(ctx1, test.sql)
-		require.NoError(t, err)
-		tk.ResultSetToResult(rs[0], fmt.Sprintf("sql: %v", test.sql))
-	}
 }
 
 func TestIncorrectLimitArg(t *testing.T) {
